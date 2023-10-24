@@ -1,0 +1,75 @@
+# -*- coding: utf-8 -*-
+"""
+Created on Tue Oct 24, 2023
+
+@author: lyool
+"""
+
+import pandas as pd
+import re
+from collections import defaultdict
+from fuzzywuzzy import fuzz
+
+# Function to load and preprocess data
+def load_and_preprocess(file_name):
+    # Load Excel file and use the sheet called "data"
+    df = pd.read_excel(file_name, sheet_name='data')
+
+    # Concatenating street and city to form a full address
+    df['full_address'] = df['Street'] + ' ' + df['City']
+
+    # Standardize the address
+    df['standard_address'] = df['full_address'].apply(standardize_address)
+
+    # Initialize a column for duplicate_count
+    df['duplicate_count'] = 0
+    return df
+
+# Function to standardize the address
+def standardize_address(address):
+# Add any additional parameters or anything you see that may be commonly mispelled, or abbreviated in your dataset 
+    address = str(address).lower()
+    address = re.sub(r'street', 'st', address)
+    address = re.sub(r'drive', 'dr', address)
+    address = re.sub(r'avenue', 'ave', address)
+    address = re.sub(r'boulevard', 'blvd', address)
+    address = re.sub(r'lane', 'ln', address)
+    address = re.sub(r'road', 'rd', address)
+    address = re.sub(r'place', 'pl', address)
+    address = re.sub(r'court', 'ct', address)
+    address = re.sub(r'terrace', 'terr', address)
+    address = re.sub(r'parkway', 'pkwy', address)
+    address = re.sub(r'[^a-z0-9\s]', '', address)
+    return address
+
+# Function to find and sequentially count duplicates for each 'Account_Num'
+def find_and_count_duplicates(df):
+    for ship_to_erp_no in df['ShipTo ERP No'].unique():
+        sub_df = df[df['ShipTo ERP No'] == ship_to_erp_no]
+        addresses = sub_df['standard_address'].tolist()
+        seen = defaultdict(int)
+
+        for i, address1 in enumerate(addresses):
+            idx1 = sub_df.index[i]
+            df.at[idx1, 'duplicate_count'] = seen[address1]
+            seen[address1] += 1
+            #Very useful part, allows you to count it's a duplicate if it is at least 80% similar, can easily be adjusted
+            for j, address2 in enumerate(addresses[i + 1:]):
+                idx2 = sub_df.index[i + j + 1]
+                score = fuzz.ratio(address1, address2)
+                if score > 80:
+                    df.at[idx2, 'duplicate_count'] = seen[address2]
+                    seen[address2] += 1
+
+# Load and preprocess each file
+df1 = load_and_preprocess('File1.xlsx')
+df2 = load_and_preprocess('File2.xlsx')
+
+# Combine the two DataFrames
+address_df = pd.concat([df1, df2], ignore_index=True)
+
+# Find and count duplicates
+find_and_count_duplicates(address_df)
+
+# Save the modified DataFrame back to Excel
+address_df.to_excel('Your_file_NAME.xlsx', index=False, sheet_name='data')
