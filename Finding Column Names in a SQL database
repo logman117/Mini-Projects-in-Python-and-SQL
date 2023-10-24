@@ -1,0 +1,12 @@
+-- this is probably the most useful SSMS query I have in my arsenal. I hope it serves you well!
+
+select
+c.name as 'Columnname',
+t.name as 'tablename'
+from sys.columns c
+--you can adjust tables to Views if you want to look in there as well
+join sys.tables t on c.object_id = t.object_id
+where c.name like '%LineNum%'
+order  by 
+t.name,
+c.name;
