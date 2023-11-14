@@ -4,6 +4,7 @@ Created on Tue Oct 24, 2023
 
 @author: lyool
 """
+########### With the function below we are simply counting the duplicates ###########
 
 import pandas as pd
 import re
@@ -57,7 +58,7 @@ def find_and_count_duplicates(df):
             for j, address2 in enumerate(addresses[i + 1:]):
                 idx2 = sub_df.index[i + j + 1]
                 score = fuzz.ratio(address1, address2)
-                if score > 80:
+                if score > 90:
                     df.at[idx2, 'duplicate_count'] = seen[address2]
                     seen[address2] += 1
 
@@ -73,3 +74,91 @@ find_and_count_duplicates(address_df)
 
 # Save the modified DataFrame back to Excel
 address_df.to_excel('Your_file_NAME.xlsx', index=False, sheet_name='data')
+
+
+
+
+############# END OF CODE_1 #############
+
+########### With the function below instead of just deleting it we "mark" the duplicates for merging so it can be ported into SAP ###########
+
+
+
+
+import pandas as pd
+import re
+from collections import defaultdict
+from fuzzywuzzy import fuzz
+
+# Function to load and preprocess data
+def load_and_preprocess(file_name):
+    # Load Excel file and use the sheet called "data"
+    df = pd.read_excel(file_name, sheet_name='data')
+
+    # Concatenating street and city to form a full address
+    df['full_address'] = df['Street'] + ' ' + df['City']
+
+    # Standardize the address
+    df['standard_address'] = df['full_address'].apply(standardize_address)
+
+    # Initialize a column for duplicate_count
+   #d f['duplicate_count'] = 0 
+    return df
+
+# Function to standardize the address
+def standardize_address(address):
+# Add any additional parameters or anything you see that may be commonly mispelled, or abbreviated in your dataset 
+    address = str(address).lower()
+    address = re.sub(r'street', 'st', address)
+    address = re.sub(r'drive', 'dr', address)
+    address = re.sub(r'avenue', 'ave', address)
+    address = re.sub(r'boulevard', 'blvd', address)
+    address = re.sub(r'lane', 'ln', address)
+    address = re.sub(r'road', 'rd', address)
+    address = re.sub(r'place', 'pl', address)
+    address = re.sub(r'court', 'ct', address)
+    address = re.sub(r'terrace', 'terr', address)
+    address = re.sub(r'parkway', 'pkwy', address)
+    address = re.sub(r'[^a-z0-9\s]', '', address)
+    return address
+
+# Function to find and mark duplicates for each 'ShipTo ERP No' and suggest merges
+def mark_and_suggest_merges(df):
+    merge_suggestions = {}  # This will hold our original entry 'Location ID' for each duplicate address
+    for account_id in df['Account ID'].unique():
+        sub_df = df[df['Account ID'] == account_id]
+        addresses = sub_df['standard_address'].tolist()
+
+        for i, address1 in enumerate(addresses):
+            for j, address2 in enumerate(addresses[i + 1:]):
+                score = fuzz.ratio(address1, address2)
+                if score > 90:  # Assuming 90 is the threshold for duplicates
+                    original_idx = sub_df.index[i]  # Original entry index
+                    duplicate_idx = sub_df.index[i + j + 1]  # Duplicate entry index
+                    # We assume that the original entry is the one with the higher 'Number of relevant Installed Products'
+                    if df.at[original_idx, "Number of relevant Installed Prodcuts"] >= df.at[duplicate_idx, "Number of relevant Installed Prodcuts"]:
+                        merge_suggestions[duplicate_idx] = df.at[original_idx, 'Location ID']
+                    else:
+                        merge_suggestions[original_idx] = df.at[duplicate_idx, 'Location ID']
+
+    # Apply the merge suggestions to the 'merge_with' column
+    df['merge_with'] = df.index.map(merge_suggestions).fillna('No merge needed')
+    return df
+
+# Load and preprocess each file
+df1 = load_and_preprocess('File1.xlsx')
+df2 = load_and_preprocess('File2.xlsx')
+
+# Combine the two DataFrames
+address_df = pd.concat([df1, df2], ignore_index=True)
+
+# Apply the mark_and_suggest_merges function to the combined DataFrame
+address_df = mark_and_suggest_merges(address_df)
+
+# Save the modified DataFrame back to Excel with a dynamic name
+address_df.to_excel('Merged_Modified.xlsx', index=False, sheet_name='data')
+
+
+
+
+############# END OF CODE_2 #############
