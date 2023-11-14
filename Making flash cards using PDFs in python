@@ -1,0 +1,35 @@
+### I used this to make flashcards to learn the basics of python, r and sql ###
+
+from reportlab.lib.pagesizes import letter
+from reportlab.pdfgen import canvas
+from reportlab.lib import colors
+
+# Prepare the content of slides
+slides_content = [
+    # Slide 1
+    "...",
+    # Slide 2 (and so on for each slide)
+    "...",
+]
+
+def create_flashcards(filename, contents): 
+    c = canvas.Canvas(filename, pagesize=letter) 
+    width, height = letter  # Save the dimensions of the letter size
+
+    for slide in contents:
+        c.setStrokeColor(colors.black)
+        c.setFillColor(colors.black)
+        c.rect(50, height-50-500, width-100, 500, stroke=1, fill=0)  # Draw a rectangle for the border of the flashcard
+
+        text = c.beginText(60, height - 60)  # Begin text object
+        text.setFont("Helvetica", 12)
+        text.setFillColor(colors.black)
+        text.textLines(slide)  # Add the slide content
+
+        c.drawText(text)  # Draw the text object
+        c.showPage()  # End the current page and start a new one
+
+    c.save()  # Save the PDF file
+
+# Create a PDF file with flashcards
+create_flashcards("flashcards.pdf", slides_content)
