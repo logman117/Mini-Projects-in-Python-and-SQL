@@ -1,0 +1,87 @@
+"""
+Currency Conversion with Historical Data and Caching
+
+This script is designed to demonstrate a practical application of currency conversion in a data science context. It showcases how to convert currency values from various currencies to EUR (Euro) based on historical exchange rates. The script creates a sample DataFrame representing hypothetical transactions in different currencies with corresponding dates and amounts. 
+
+Key Features:
+- Creation of a sample transaction DataFrame with random dates, spend amounts, and currencies.
+- Fetching historical exchange rates using the 'forex-python' library.
+- Caching of exchange rates to minimize redundant API calls and improve efficiency.
+- Conversion of transaction amounts from various currencies to EUR based on the exchange rate of the transaction date.
+- The script is structured to be easily understood and modified for similar data science tasks involving currency conversion.
+
+This example is ideal for showcasing data manipulation and external API interaction in a Python-based data science workflow.
+
+Requirements:
+- forex-python
+- pandas
+- numpy
+"""
+
+import pandas as pd
+from forex_python.converter import CurrencyRates
+from datetime import datetime
+import numpy as np
+import os
+
+# Create an example DataFrame
+np.random.seed(0)
+currencies = ['USD', 'EUR', 'JPY', 'GBP', 'AUD', 'CAD', 'CHF', 'CNY', 'SEK', 'NZD', 'MXN', 'SGD', 'HKD', 'NOK', 'KRW', 'TRY', 'RUB', 'INR', 'BRL']
+data = {
+    'TransactionDate': pd.date_range(start='2021-01-01', periods=100, freq='D'),
+    'CustomerSpend': np.random.randint(1, 1001, size=100),
+    'CurrencyCode': np.random.choice(currencies, size=100)
+}
+transactions_df = pd.DataFrame(data)
+
+# Global exchange rates cache
+exchange_rate_cache = pd.DataFrame()
+
+# Function to fetch or cache exchange rates
+def fetch_or_cache_rate(currency_converter, source_currency, target_currency, transaction_date, cache_filepath):
+    global exchange_rate_cache
+    date_str = transaction_date.strftime('%Y-%m-01')
+    
+    if 'Date' in exchange_rate_cache.columns:
+        rate_record = exchange_rate_cache[
+            (exchange_rate_cache['Date'] == date_str) & 
+            (exchange_rate_cache['SourceCurrency'] == source_currency) & 
+            (exchange_rate_cache['TargetCurrency'] == target_currency)
+        ]
+    else:
+        rate_record = pd.DataFrame()
+
+    if rate_record.empty:
+        rate = currency_converter.get_rate(source_currency, target_currency, transaction_date)
+        new_entry = pd.DataFrame([{'Date': date_str, 'SourceCurrency': source_currency, 'TargetCurrency': target_currency, 'ExchangeRate': rate}])
+        exchange_rate_cache = pd.concat([exchange_rate_cache, new_entry])
+        exchange_rate_cache.to_csv(cache_filepath, index=False)
+    else:
+        rate = rate_record['ExchangeRate'].values[0]
+
+    return rate
+
+# Initialize currency converter
+currency_converter = CurrencyRates()
+
+# Load or create exchange rates cache
+cache_filepath = 'exchange_rates_cache.csv'
+if os.path.exists(cache_filepath):
+    exchange_rate_cache = pd.read_csv(cache_filepath)
+else:
+    exchange_rate_cache = pd.DataFrame(columns=['Date', 'SourceCurrency', 'TargetCurrency', 'ExchangeRate'])
+
+# Convert the date column to datetime format
+transactions_df['TransactionDate'] = pd.to_datetime(transactions_df['TransactionDate'], errors='coerce')
+
+# Function to process each transaction
+def convert_currency(row):
+    if pd.isna(row['TransactionDate']) or row['CurrencyCode'] == 'EUR':
+        return row['CustomerSpend']
+
+    transaction_date = row['TransactionDate'].replace(day=1)
+    rate = fetch_or_cache_rate(currency_converter, row['CurrencyCode'], 'EUR', transaction_date, cache_filepath)
+    return row['CustomerSpend'] * rate
+
+# Apply currency conversion
+transactions_df['SpendInEUR'] = transactions_df.apply(convert_currency, axis=1)
