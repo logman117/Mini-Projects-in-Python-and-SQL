@@ -1,0 +1,235 @@
+# -*- coding: utf-8 -*-
+"""
+Created on Tue Dec 26 06:00:47 2023
+@author: Logan Yool
+"""
+
+import pandas as pd
+import numpy as np
+from sklearn.preprocessing import MinMaxScaler
+from statsmodels.tsa.statespace.sarimax import SARIMAX
+from sklearn.metrics import mean_squared_error
+
+# Set a seed for reproducibility
+np.random.seed(42)
+
+# Departments
+departments = [
+    'Team Sports', 'Fitness', 'Outdoor', 'Golf', 
+    'Tennis', 'Running', 'Footwear', 'Apparel'
+]
+
+# Constants for inventory management
+SAFETY_STOCK_MULTIPLIER = 1.5  # Multiplier for calculating safety stock
+REORDER_POINT_MULTIPLIER = 1.2  # Multiplier for calculating reorder point
+DC_INVENTORY_WEEKS = 2  # Weeks of inventory to keep at the Distribution Center
+STORE_INVENTORY_WEEKS = 1  # Weeks of inventory to keep at the Stores
+
+
+# Simulated demographics: Generations with Income levels and Credit Card ownership probability
+demographics = {
+    'Gen Z - Low Income': {'CreditCard': 0.2},
+    'Gen Z - Middle Income': {'CreditCard': 0.3},
+    'Gen Z - High Income': {'CreditCard': 0.4},
+    'Millennial - Low Income': {'CreditCard': 0.3},
+    'Millennial - Middle Income': {'CreditCard': 0.5},
+    'Millennial - High Income': {'CreditCard': 0.6},
+    'Gen X - Low Income': {'CreditCard': 0.4},
+    'Gen X - Middle Income': {'CreditCard': 0.6},
+    'Gen X - High Income': {'CreditCard': 0.7},
+    'Boomer - Low Income': {'CreditCard': 0.5},
+    'Boomer - Middle Income': {'CreditCard': 0.7},
+    'Boomer - High Income': {'CreditCard': 0.8},
+    'Gen A - Low Income': {'CreditCard': 0.1},
+    'Gen A - Middle Income': {'CreditCard': 0.2},
+    'Gen A - High Income': {'CreditCard': 0.3},
+}
+
+# Time range for the dataset
+months = pd.date_range(start='2023-01', end='2023-12', freq='MS').strftime('%Y-%m')
+
+# Number of stores and their unique demographic mixes
+num_stores = 4  # Example number of stores
+store_profiles = {
+    f'Store_{i}': np.random.choice(list(demographics.keys()), size=3, replace=False) 
+    for i in range(1, num_stores + 1)
+}
+
+# Function to calculate sales based on marketing, discount, seasonality, and demographic profile
+def calculate_sales(item_id, marketing_spend, discount, seasonal, demographic_profile, month, category):
+    # Adjusting base demand based on category (High-Demand, Low-Demand)
+    if category == 'High-Demand':
+        base_demand = 1200
+    elif category == 'Low-Demand':
+        base_demand = 600
+    else:
+        base_demand = 1000  # Default for 'Seasonal' and other categories
+
+    # Seasonal effect based on item's seasonality category and month
+    if seasonal == 'Summer' and 6 <= month.month <= 8:
+        seasonal_effect = 200  # Boost for summer items in summer months
+    elif seasonal == 'Winter' and (1 <= month.month <= 2 or month.month == 12):
+        seasonal_effect = 200  # Boost for winter items in winter months
+    elif seasonal == 'Year-Round':
+        seasonal_effect = 0  # No seasonal effect
+    else:
+        seasonal_effect = np.sin(2 * np.pi * month.month / 12) * 100
+
+    # Demographic and marketing effects
+    marketing_effect = np.log1p(marketing_spend) * 50
+    demographic_factor = 1 + 0.1 * demographics[demographic_profile]['CreditCard']
+
+    # Calculating sales
+    sales = (base_demand + marketing_effect + seasonal_effect) * (1 - discount) * demographic_factor
+    return max(sales, 0)
+
+
+# Data generation with store dimension
+data = []
+for month in pd.date_range(start='2023-01', end='2023-12', freq='MS'):
+    for store, store_demos in store_profiles.items():
+        for dept in departments:
+            for item_id in range(1, 11):
+                marketing_spend = np.random.randint(500, 5000)
+                discount = np.random.uniform(0, 0.3)
+                seasonal = np.random.choice(['Winter', 'Summer', 'Year-Round'])
+                demographic_profile = np.random.choice(store_demos)
+                category = np.random.choice(['High-Demand', 'Low-Demand', 'Seasonal'])
+                sales = calculate_sales(f'Item_{item_id}', marketing_spend, discount, seasonal, demographic_profile, month, category)
+                lead_time = np.random.choice([1, 2, 4, 8, 12])
+                price = np.random.uniform(20, 200)
+
+                data.append([
+                    store, month.strftime('%Y-%m'), dept, f"Item_{item_id}", sales, 
+                    marketing_spend, discount, lead_time, 
+                    price, category, seasonal, demographic_profile
+                ])
+
+                
+# Creating DataFrame
+df = pd.DataFrame(data, columns=[
+    'Store', 'Month', 'Department', 'Item_ID', 'Sales', 
+    'Marketing_Spend', 'Discount', 'Lead_Time', 
+    'Price', 'Category', 'Seasonality', 'Demographic_Profile'
+])
+
+### Clean The Data ###
+
+# Check for missing values
+print(df.isnull().sum())
+
+# Create additional features
+df['Marketing_Score'] = df['Marketing_Spend'] * (1 - df['Discount'])
+
+# Convert categorical data to a format suitable for modeling
+df = pd.get_dummies(df, columns=['Department', 'Category', 'Seasonality', 'Demographic_Profile'])
+
+# Apply Min-Max scaling to specific columns
+min_max_scaler = MinMaxScaler()
+df[['Sales', 'Marketing_Spend']] = min_max_scaler.fit_transform(df[['Sales', 'Marketing_Spend']])
+
+# Make sure the data is sorted by time for time-series analysis
+df['Month'] = pd.to_datetime(df['Month'])
+df.sort_values(by='Month', inplace=True)
+
+#df['Month'] = pd.to_datetime(df['Month'])
+#df.set_index('Month', inplace=True)
+#df.sort_index(inplace=True)
+
+
+### SARIMA Model Building and Validation for Each Store ###
+
+def build_sarima_model(item_id, store_data):
+    item_data = store_data[store_data['Item_ID'] == item_id]
+    
+    # Split data
+    train = item_data[item_data['Month'] < '2023-10-01']
+    test = item_data[item_data['Month'] >= '2023-10-01']
+
+    # Fit SARIMA model
+    model = SARIMAX(train['Sales'], order=(1, 1, 1), seasonal_order=(1, 1, 1, 12))
+    model_fit = model.fit(disp=False)
+
+    # Forecast
+    forecast = model_fit.forecast(steps=len(test))
+
+    # Calculate error (e.g., RMSE)
+    error = np.sqrt(mean_squared_error(test['Sales'], forecast))
+    
+    return forecast, error
+
+
+store_results = {}
+for store in store_profiles.keys():
+    store_data = df[df['Store'] == store]
+    results = {}
+    for item in store_data['Item_ID'].unique():
+        forecast, error = build_sarima_model(item, store_data)
+        results[item] = {'forecast': forecast, 'rmse': error}
+    store_results[store] = results
+
+# Output results
+for store, items in store_results.items():
+    print(f'\nResults for {store}:')
+    for item, res in items.items():
+        print(f'  Item: {item}, RMSE: {res["rmse"]}')
+        
+# Code for Stage 4: Inventory Management Simulation
+
+
+# Constants for inventory management
+SAFETY_STOCK_MULTIPLIER = 1.5  # Multiplier for calculating safety stock
+REORDER_POINT_MULTIPLIER = 1.2  # Multiplier for calculating reorder point
+DC_INVENTORY_WEEKS = 2  # Weeks of inventory to keep at the Distribution Center
+STORE_INVENTORY_WEEKS = 1  # Weeks of inventory to keep at the Stores
+
+def calculate_dc_inventory_for_each_item(store_results):
+    aggregated_forecast = {}
+    for store_forecasts in store_results.values():
+        for item, result in store_forecasts.items():
+            forecast_sum = sum(result['forecast'])
+            aggregated_forecast[item] = aggregated_forecast.get(item, 0) + forecast_sum * DC_INVENTORY_WEEKS
+    return aggregated_forecast
+
+# Function to simulate store inventory for each item
+def simulate_store_inventory_for_each_item(store_results, average_lead_times, average_prices):
+    inventory_simulation = {}
+    for store_forecasts in store_results.values():
+        for item, result in store_forecasts.items():
+            if 'forecast' in result:
+                forecast_avg = np.mean(result['forecast'])
+                safety_stock = forecast_avg * STORE_INVENTORY_WEEKS * SAFETY_STOCK_MULTIPLIER
+                reorder_point = forecast_avg * average_lead_times[item] * REORDER_POINT_MULTIPLIER
+                inventory_value = safety_stock * average_prices[item]
+
+                if item not in inventory_simulation:
+                    inventory_simulation[item] = {'safety_stock': 0, 'reorder_point': 0, 'inventory_value': 0}
+
+                inventory_simulation[item]['safety_stock'] += safety_stock
+                inventory_simulation[item]['reorder_point'] += reorder_point
+                inventory_simulation[item]['inventory_value'] += inventory_value
+            else:
+                print(f"Warning: Forecast data not available for item {item} in store {store}")
+
+    return inventory_simulation
+
+# Get average prices for each item
+average_prices = df.groupby('Item_ID')['Price'].mean().to_dict()
+
+# Get average lead times for each item
+average_lead_times = df.groupby('Item_ID')['Lead_Time'].mean().to_dict()
+
+# Calculate DC and store inventory
+dc_inventory_requirements = calculate_dc_inventory_for_each_item(store_results)
+store_inventory_simulations = simulate_store_inventory_for_each_item(store_results, average_lead_times, average_prices)
+
+# Display DC inventory requirements
+print("\nDistribution Center Inventory Requirements (2 weeks):")
+for item, quantity in dc_inventory_requirements.items():
+    print(f"  Item: {item}, Quantity: {quantity:.0f}, Value: ${quantity * average_prices[item]:.2f}")
+
+# Display store inventory simulation for an example store
+example_store = list(store_inventory_simulations.keys())[0]
+print(f"\nInventory Simulation for Store {example_store}:")
+for item, inventory_data in store_inventory_simulations.items():
+    print(f"  Item: {item}, Safety Stock: {inventory_data['safety_stock']:.0f}, Reorder Point: {inventory_data['reorder_point']:.0f}, Inventory Value: ${inventory_data['inventory_value']:.2f}")
